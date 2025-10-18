@@ -1,6 +1,9 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
+from keep_alive import keep_alive
+keep_alive()
+
 # === Replace this with your actual token ===
 TOKEN = "8290143475:AAH0cSVWLQeoTkhXqPEe2Dn6WzH_xnMm0-M"
 
