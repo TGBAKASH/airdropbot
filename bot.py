@@ -2,11 +2,8 @@
 import logging
 import os
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+# REMOVED THE EXTRA ) HERE
 from keep_alive import keep_alive
 import airdrop
 import wallet
@@ -25,7 +22,7 @@ if not BOT_TOKEN:
 
 # --- Basic commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot is online and running!")
+    await update.message.reply_text('Hello!')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ℹ️ Use /start to begin.")
@@ -43,11 +40,11 @@ def main():
     # Register handlers from other modules
     airdrop.register_airdrop_handlers(app)
     wallet.register_wallet_handlers(app)
-    # Admin handlers don’t have register_ function; skip for now
+    # Admin handlers don't have register_ function; skip for now
 
     logger.info("🚀 Bot is starting...")
     app.run_polling(drop_pending_updates=True)
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    main()  # Just call your main() function
