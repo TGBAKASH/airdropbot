@@ -1,65 +1,52 @@
 import os
-from telegram.ext import ApplicationBuilder
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 from keep_alive import keep_alive
-from airdrop import register_airdrop_handlers
-from wallet import register_wallet_handlers
-from telegram.ext import CommandHandler, MessageHandler, filters
-from telegram import Update
-from telegram.ext import ContextTypes
-from keep_alive import start_keep_alive
 
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # make sure this is set in Render
 
-# Optional admin panel if you later add it
-# from admin import register_admin_handlers  
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "1377923423"))
-
-# ------------------------------
-# Basic commands
-# ------------------------------
-
+# === START COMMAND ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("👤 Profile", callback_data='profile')],
+        [InlineKeyboardButton("🎁 Airdrops", callback_data='airdrops')],
+        [InlineKeyboardButton("💰 Wallet", callback_data='wallet')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "🤖 Welcome to Airdrop & Wallet Bot!\n\n"
-        "Use the menu buttons below to explore available features."
+        f"👋 Welcome {update.effective_user.first_name}!\n\n"
+        "Use the menu below to navigate:",
+        reply_markup=reply_markup
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📘 *Available Commands:*\n"
-        "/start - Start the bot\n"
-        "/help - Show this help message"
-    )
+# === CALLBACK HANDLER ===
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    choice = query.data
 
-# ------------------------------
-# Main function
-# ------------------------------
+    if choice == 'profile':
+        await query.edit_message_text("👤 Your Profile Details ...")
+    elif choice == 'airdrops':
+        await query.edit_message_text("🎁 Available Airdrops ...")
+    elif choice == 'wallet':
+        await query.edit_message_text("💰 Your Wallet Info ...")
 
+# === MAIN ===
 def main():
-    print("🚀 Starting Telegram Bot...")
-    keep_alive()  # keeps your bot alive on Render
+    keep_alive()  # runs Flask in background
+    print("Starting bot polling...")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Basic commands
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CallbackQueryHandler(button_handler))
 
-    # Airdrop features
-    register_airdrop_handlers(app)
-
-    # Wallet features
-    register_wallet_handlers(app)
-
-    # Optional admin panel later
-    # register_admin_handlers(app)
-
-    print("🤖 Bot is running... Ready to receive updates!")
-    app.run_polling()
-
-from keep_alive import start_keep_alive
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    start_keep_alive()   # 🟢 Keeps the bot alive + starts TX notifications
-    app.run_polling()
+    main()
