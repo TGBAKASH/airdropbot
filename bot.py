@@ -1,237 +1,246 @@
+# bot.py
 import os
-import requests
-import sqlite3
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
 )
+import database
+import airdrop
+import wallet
+import admin
 from keep_alive import keep_alive
 
-# ====== ENV VARS ======
+# Admin IDs: includes provided admin id and optional ENV overrides
+ADMIN_IDS = set([1377923423])
+env_admins = os.getenv("ADMIN_IDS", "")
+for x in env_admins.split(","):
+    if x.strip().isdigit():
+        ADMIN_IDS.add(int(x.strip()))
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ALCHEMY_API_KEY = os.getenv("ALCHEMY_API_URL")
 
-# Alchemy Webhook IDs and Secrets
-ALCHEMY_WEBHOOK_ETH = os.getenv("ALCHEMY_WEBHOOK_ID_ETH")
-ALCHEMY_WEBHOOK_ARB = os.getenv("ALCHEMY_WEBHOOK_ID_ARB")
-ALCHEMY_WEBHOOK_BASE = os.getenv("ALCHEMY_WEBHOOK_ID_BASE")
+# init DB
+database.init_db()
 
-ALCHEMY_SECRET_ETH = os.getenv("ALCHEMY_WEBHOOK_SECRET_ETH")
-ALCHEMY_SECRET_ARB = os.getenv("ALCHEMY_WEBHOOK_SECRET_ARB")
-ALCHEMY_SECRET_BASE = os.getenv("ALCHEMY_WEBHOOK_SECRET_BASE")
-
-# ====== DATABASE SETUP ======
-conn = sqlite3.connect("users.db", check_same_thread=False)
-cur = conn.cursor()
-
-cur.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY,
-        username TEXT,
-        first_name TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-""")
-
-cur.execute("""
-    CREATE TABLE IF NOT EXISTS wallets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        chain TEXT,
-        address TEXT,
-        notifications_enabled INTEGER DEFAULT 1,
-        last_balance TEXT,
-        FOREIGN KEY(user_id) REFERENCES users(id)
-    )
-""")
-
-conn.commit()
-
-# ====== DB FUNCTIONS ======
-def get_or_create_user(user_id, username, first_name):
-    cur.execute("SELECT * FROM users WHERE id=?", (user_id,))
-    if not cur.fetchone():
-        cur.execute(
-            "INSERT INTO users (id, username, first_name) VALUES (?, ?, ?)",
-            (user_id, username, first_name)
-        )
-        conn.commit()
-
-def get_user_wallets(user_id):
-    cur.execute("SELECT chain, address, notifications_enabled FROM wallets WHERE user_id=?", (user_id,))
-    return cur.fetchall()
-
-def add_wallet(user_id, chain, address):
-    cur.execute("INSERT INTO wallets (user_id, chain, address) VALUES (?, ?, ?)", (user_id, chain, address))
-    conn.commit()
-
-def delete_wallet(user_id, address):
-    cur.execute("DELETE FROM wallets WHERE user_id=? AND address=?", (user_id, address))
-    conn.commit()
-
-def toggle_notifications(user_id, address):
-    cur.execute(
-        "UPDATE wallets SET notifications_enabled = 1 - notifications_enabled WHERE user_id=? AND address=?",
-        (user_id, address)
-    )
-    conn.commit()
-
-# ====== CHAINS ======
-CHAINS = {
-    "Ethereum": {
-        "url": f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}",
-        "webhook_id": ALCHEMY_WEBHOOK_ETH,
-        "webhook_secret": ALCHEMY_SECRET_ETH,
-        "symbol": "ETH",
-        "icon": "🔷"
-    },
-    "Arbitrum": {
-        "url": f"https://arb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}",
-        "webhook_id": ALCHEMY_WEBHOOK_ARB,
-        "webhook_secret": ALCHEMY_SECRET_ARB,
-        "symbol": "ETH",
-        "icon": "🔵"
-    },
-    "Base": {
-        "url": f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}",
-        "webhook_id": ALCHEMY_WEBHOOK_BASE,
-        "webhook_secret": ALCHEMY_SECRET_BASE,
-        "symbol": "ETH",
-        "icon": "🟦"
-    },
-    "Polygon": {
-        "url": f"https://polygon-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}",
-        "webhook_id": None,
-        "webhook_secret": None,
-        "symbol": "MATIC",
-        "icon": "🟣"
-    },
-    "Optimism": {
-        "url": f"https://opt-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}",
-        "webhook_id": None,
-        "webhook_secret": None,
-        "symbol": "ETH",
-        "icon": "🔴"
-    }
-}
-
-# ====== WEB3 HELPERS ======
-def get_eth_balance(wallet, url):
-    try:
-        payload = {"jsonrpc": "2.0", "method": "eth_getBalance", "params": [wallet, "latest"], "id": 1}
-        r = requests.post(url, json=payload, timeout=10).json()
-        wei = int(r.get("result", "0x0"), 16)
-        return round(wei / 1e18, 6)
-    except Exception:
-        return 0
-
-def get_token_metadata(address, url):
-    try:
-        data = {"jsonrpc": "2.0", "method": "alchemy_getTokenMetadata", "params": [address], "id": 1}
-        r = requests.post(url, json=data, timeout=10).json()
-        return r.get("result", {})
-    except Exception:
-        return {}
-
-def get_token_balances(wallet, url):
-    try:
-        data = {"jsonrpc": "2.0", "method": "alchemy_getTokenBalances", "params": [wallet], "id": 1}
-        r = requests.post(url, json=data, timeout=10).json()
-        balances = r.get("result", {}).get("tokenBalances", [])
-        tokens = []
-        for t in balances[:10]:
-            bal_hex = t.get("tokenBalance")
-            if not bal_hex or bal_hex == "0x0":
-                continue
-            token_addr = t.get("contractAddress")
-            meta = get_token_metadata(token_addr, url)
-            if meta:
-                name = meta.get("name", "Unknown")
-                symbol = meta.get("symbol", "")
-                dec = meta.get("decimals", 18)
-                bal = int(bal_hex, 16) / (10 ** dec)
-                if bal > 0:
-                    tokens.append((name, symbol, round(bal, 4)))
-        return tokens
-    except Exception:
-        return []
-
-# ====== MAIN MENU ======
-def get_main_menu():
-    return InlineKeyboardMarkup([
+def main_menu_kb(is_admin=False):
+    kb = [
         [InlineKeyboardButton("👤 Profile", callback_data="profile")],
         [InlineKeyboardButton("🎁 Airdrops", callback_data="airdrops")],
         [InlineKeyboardButton("💼 Wallet", callback_data="wallet_menu")],
         [InlineKeyboardButton("ℹ️ Help", callback_data="help")]
-    ])
+    ]
+    if is_admin:
+        kb.insert(3, [InlineKeyboardButton("⚙️ Admin", callback_data="admin_panel")])
+    return InlineKeyboardMarkup(kb)
 
-# ====== COMMAND HANDLERS ======
+# Start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    get_or_create_user(user.id, user.username, user.first_name)
-    text = (
-        "🌟 *Welcome to Sage Airdrops Bot!*\n\n"
-        "Your comprehensive crypto companion for:\n"
-        "• 👤 Profile Management\n"
-        "• 🎁 Airdrop Opportunities\n"
-        "• 💼 Multi-chain Wallet Tracking\n"
-        "• 🔔 Real-time Notifications\n\n"
-        "Choose an option below to get started:"
+    database.ensure_user(user.id, user.username or "", user.first_name or "")
+    is_admin = user.id in ADMIN_IDS
+    await update.message.reply_text(
+        "🌟 Welcome to Sage Airdrops Bot — use the menu below.",
+        reply_markup=main_menu_kb(is_admin)
     )
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_menu())
 
-# ====== CALLBACK HANDLER ======
+# Button handler central
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
     data = query.data
-    user = query.from_user
 
+    # --- Main navigation ---
+    if data == "airdrops":
+        await airdrop.show_airdrops(query, user_id)
+        return
+    if data == "wallet_menu":
+        await wallet.wallet_menu(query, user_id)
+        return
     if data == "profile":
-        wallets = get_user_wallets(user.id)
-        text = (
-            f"👤 *Your Profile*\n\n"
-            f"📛 Name: {user.first_name or 'N/A'}\n"
-            f"🆔 User ID: `{user.id}`\n"
-            f"📱 Username: @{user.username or 'Not set'}\n"
-            f"💼 Linked Wallets: {len(wallets)}"
-        )
-        buttons = [[InlineKeyboardButton("⬅️ Back", callback_data="main_menu")]]
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.edit_message_text(f"👤 Name: {query.from_user.first_name}\n🆔 ID: `{query.from_user.id}`", parse_mode="Markdown")
+        return
+    if data == "help":
+        await query.edit_message_text("Use the buttons. Forward a message to add an airdrop. Use Wallet → Add Wallet to save addresses.")
+        return
 
-    elif data == "help":
-        text = (
-            "ℹ️ *Help & Information*\n\n"
-            "👤 Profile — View your user info\n"
-            "🎁 Airdrops — Explore testnet/mainnet airdrops\n"
-            "💼 Wallet — Manage your wallets & balances"
-        )
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="main_menu")]]))
+    # --- Admin panel ---
+    if data == "admin_panel":
+        if user_id not in ADMIN_IDS:
+            await query.edit_message_text("❌ Admins only.")
+            return
+        await admin.admin_panel(query)
+        return
+    if data == "admin_list_users":
+        if user_id not in ADMIN_IDS:
+            await query.edit_message_text("❌ Admins only.")
+            return
+        await admin.list_users(query)
+        return
+    if data == "admin_add_airdrop_manual":
+        if user_id not in ADMIN_IDS:
+            await query.edit_message_text("❌ Admins only.")
+            return
+        # start manual airdrop flow in user_data
+        context.user_data['airdrop_add_flow'] = {"step": 1, "data": {}}
+        await query.edit_message_text("📝 *Add Airdrop (manual)*\nStep 1/3 — Send the *title* of the airdrop.", parse_mode="Markdown")
+        return
+    if data == "admin_list_airdrops":
+        if user_id not in ADMIN_IDS:
+            await query.edit_message_text("❌ Admins only.")
+            return
+        # reuse airdrop listing for admins
+        await airdrop.show_airdrops(query, user_id)
+        return
 
-    elif data == "main_menu":
-        await query.edit_message_text("🌟 *Sage Airdrops Bot*\n\nChoose an option below:", parse_mode="Markdown", reply_markup=get_main_menu())
+    # Airdrop delete (callback format: airdrop_remove_{id})
+    if data.startswith("airdrop_remove_"):
+        if user_id not in ADMIN_IDS:
+            await query.edit_message_text("❌ Admins only.")
+            return
+        try:
+            aid = int(data.split("_")[-1])
+            database.delete_airdrop(aid)
+            await query.edit_message_text("✅ Airdrop removed.")
+        except Exception:
+            await query.edit_message_text("Failed to remove.")
+        return
 
-# ====== MESSAGE HANDLER ======
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please use the menu buttons below 👇")
+    # --- Wallet add flow ---
+    if data == "add_wallet":
+        # open pick chain keyboard
+        await wallet.pick_chain_for_add(query)
+        return
+    if data.startswith("addwallet_chain_"):
+        # user picked chain; set user_data flag and ask for address
+        chain = data.replace("addwallet_chain_", "")
+        context.user_data['awaiting_wallet_address'] = True
+        context.user_data['add_wallet_chain'] = chain
+        await query.edit_message_text(f"✏️ You selected *{chain}*. Now send the wallet address (0x...) to save.", parse_mode="Markdown")
+        return
+    if data == "view_balances":
+        # call wallet to build and send balances; use Bot instance
+        bot = context.application.bot
+        await query.edit_message_text("⏳ Fetching balances...")
+        await wallet.send_balances_for_user(bot, user_id)
+        return
 
-# ====== MAIN ======
+    if data == "wallet_menu":
+        await wallet.wallet_menu(query, user_id)
+        return
+
+    # back navigation
+    if data == "main_menu":
+        await query.edit_message_text("🌟 Main menu", reply_markup=main_menu_kb(user_id in ADMIN_IDS))
+        return
+
+    # fallback
+    await query.edit_message_text("Unknown action.")
+
+# Message handler central: handles forwarding saves, airdrop manual flow, and wallet address flow
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    m = update.message
+    uid = update.effective_user.id
+    # ensure user in DB
+    database.ensure_user(uid, update.effective_user.username or "", update.effective_user.first_name or "")
+
+    # 1) If admin is in manual airdrop flow
+    flow = context.user_data.get('airdrop_add_flow')
+    if flow:
+        step = flow.get('step', 1)
+        if step == 1:
+            # treat this message as title
+            flow['data']['title'] = m.text or ""
+            flow['step'] = 2
+            context.user_data['airdrop_add_flow'] = flow
+            await m.reply_text("Step 2/3 — Send the *description* (text).", parse_mode="Markdown")
+            return
+        elif step == 2:
+            flow['data']['content'] = m.text or ""
+            flow['step'] = 3
+            context.user_data['airdrop_add_flow'] = flow
+            await m.reply_text("Step 3/3 — Send an optional URL or send `skip` to continue.", parse_mode="Markdown")
+            return
+        elif step == 3:
+            url_text = (m.text or "").strip()
+            if url_text.lower() == "skip":
+                url_text = ""
+            flow['data']['url'] = url_text
+            # save to DB
+            data = flow['data']
+            database.add_airdrop(data.get('title',"No Title"), data.get('content',""), data.get('url',""), uid)
+            context.user_data.pop('airdrop_add_flow', None)
+            await m.reply_text("✅ Airdrop added.")
+            return
+
+    # 2) If user is in wallet add flow and sending address
+    if context.user_data.get('awaiting_wallet_address'):
+        await wallet.handle_address_message(update, context)
+        return
+
+    # 3) If message is forwarded, save to airdrops automatically
+    if m.forward_from_chat or m.forward_from:
+        title = ""
+        if m.forward_from_chat and getattr(m.forward_from_chat, "title", None):
+            title = f"Forward from {m.forward_from_chat.title}"
+        elif m.forward_from:
+            title = f"Forward from {m.forward_from.username or m.forward_from.first_name or 'user'}"
+        content = m.text or m.caption or ""
+        # attempt to build a t.me link if forward_from_chat has username and message id
+        url = ""
+        if getattr(m.forward_from_chat, "username", None) and m.message_id:
+            url = f"https://t.me/{m.forward_from_chat.username}/{m.message_id}"
+        database.add_airdrop(title or "Forwarded post", content, url, uid)
+        await m.reply_text("✅ Forward saved as an airdrop.")
+        return
+
+    # 4) default help reply
+    await m.reply_text("Use the main menu. Forward a public post to add an airdrop or go to Wallet -> Add Wallet to save an address.")
+
+# Admin broadcast utility via /broadcast <message>
+async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid not in ADMIN_IDS:
+        await update.message.reply_text("Admins only.")
+        return
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text("Usage: /broadcast <message>")
+        return
+    users = database.list_users()
+    bot = context.application.bot
+    sent = 0
+    for u in users:
+        try:
+            bot.send_message(chat_id=u, text=text)
+            sent += 1
+        except Exception:
+            pass
+    await update.message.reply_text(f"Broadcast sent to {sent} users.")
+
 def main():
-    keep_alive()  # Run Flask server on Render
-    print("🚀 Starting Sage Airdrops Bot...")
-
+    keep_alive()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("✅ Bot is now running...")
+    # commands
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("list_airdrops", airdrop.cmd_list_airdrops))
+    app.add_handler(CommandHandler("broadcast", broadcast_cmd))
+
+    # callback buttons
+    app.add_handler(CallbackQueryHandler(button_handler))
+
+    # message handler (for forwards, flows, and addresses)
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, message_handler))
+
+    print("Bot starting...")
     app.run_polling()
 
 if __name__ == "__main__":
