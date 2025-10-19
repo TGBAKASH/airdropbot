@@ -5,10 +5,7 @@ from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
     ContextTypes,
-    filters,
 )
 from keep_alive import keep_alive
 import airdrop
@@ -22,7 +19,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Bot token ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("❌ BOT_TOKEN not set in environment variables!")
@@ -45,9 +41,9 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
 
     # Register handlers from other modules
-    airdrop.register_handlers(app)
-    wallet.register_handlers(app)
-    admin.register_handlers(app)
+    airdrop.register_airdrop_handlers(app)
+    wallet.register_wallet_handlers(app)
+    # Admin handlers don’t have register_ function; skip for now
 
     logger.info("🚀 Bot is starting...")
     app.run_polling(drop_pending_updates=True)
