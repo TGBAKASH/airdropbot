@@ -58,6 +58,8 @@ def main():
     print("🤖 Bot is running... Ready to receive updates!")
     app.run_polling()
 
+from keep_alive import start_keep_alive
+
 if __name__ == "__main__":
-    start_keep_alive()
+    start_keep_alive()   # 🟢 Keeps the bot alive + starts TX notifications
     app.run_polling()
