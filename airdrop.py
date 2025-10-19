@@ -1,41 +1,93 @@
-# airdrop.py
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes
-import database
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+import os
 
-# UI helpers
-async def show_airdrops(query, user_id:int):
-    rows = database.list_airdrops(20)
-    if not rows:
-        await query.edit_message_text("No airdrops yet. Admins can forward posts to add or use Admin → Add Airdrop.")
-        return
+# In-memory storage for airdrops
+airdrop_list = []
 
-    text = "🎁 *Airdrops (latest)*\n\n"
-    buttons = []
-    for r in rows:
-        aid, title, content, url, added_by, created_at = r
-        title_short = (title[:60] + "...") if len(title) > 60 else title
-        text += f"• *{title_short}*  `id:{aid}`\n"
-        if content:
-            c = (content[:140] + "...") if len(content) > 140 else content
-            text += f"_{c}_\n"
-        if url:
-            text += f"[link]({url})\n"
-        text += "\n"
-        # delete button for admin will be shown in main button handler
-        buttons.append([InlineKeyboardButton(f"Remove {aid}", callback_data=f"airdrop_remove_{aid}")])
+ADMIN_ID = int(os.getenv("ADMIN_ID", "1377923423"))
 
-    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="main_menu")])
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+# ------------------------------------------------------------------
+# Handlers setup function (this is what bot.py imports)
+# ------------------------------------------------------------------
+def register_airdrop_handlers(app):
 
-async def cmd_list_airdrops(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = database.list_airdrops(50)
-    if not rows:
-        await update.message.reply_text("No airdrops.")
-        return
-    text = "🎁 Airdrops:\n\n"
-    for aid, title, content, url, added_by, created_at in rows:
-        text += f"{aid}. {title} — added_by:{added_by} — {created_at}\n"
-        if url:
-            text += f"{url}\n"
-    await update.message.reply_text(text)
+    # ✅ Command: /airdrops — opens menu
+    async def airdrop_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        keyboard = [
+            [InlineKeyboardButton("📩 Forward Airdrop Post", callback_data="forward_airdrop")],
+            [InlineKeyboardButton("➕ Add Manual Airdrop", callback_data="add_manual_airdrop")],
+            [InlineKeyboardButton("📋 View All Airdrops", callback_data="list_airdrops")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("💰 *Airdrop Management Menu:*", 
+                                        reply_markup=reply_markup, parse_mode="Markdown")
+
+    # ✅ Handle button presses
+    async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+
+        if query.data == "forward_airdrop":
+            await query.edit_message_text(
+                "📩 Forward the airdrop post you want to add."
+            )
+            context.user_data["awaiting_forward"] = True
+
+        elif query.data == "add_manual_airdrop":
+            if query.from_user.id != ADMIN_ID:
+                await query.edit_message_text("❌ Only admin can add manual airdrops.")
+                return
+            await query.edit_message_text("✍️ Send me the *airdrop name* to add manually.", parse_mode="Markdown")
+            context.user_data["adding_manual"] = "name"
+
+        elif query.data == "list_airdrops":
+            if not airdrop_list:
+                await query.edit_message_text("📭 No airdrops added yet.")
+            else:
+                msg = "📋 *Current Airdrops:*\n\n"
+                for i, a in enumerate(airdrop_list, start=1):
+                    msg += f"{i}. {a['name']} — {a.get('link', 'No link')}\n"
+                await query.edit_message_text(msg, parse_mode="Markdown")
+
+    # ✅ Handle messages after button press
+    async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_data = context.user_data
+
+        # Forwarded airdrop post
+        if user_data.get("awaiting_forward"):
+            fwd = update.message
+            if fwd.forward_from_chat:
+                chat_title = fwd.forward_from_chat.title or "Unnamed Channel"
+                link = f"https://t.me/{fwd.forward_from_chat.username}" if fwd.forward_from_chat.username else "No link"
+                airdrop_list.append({"name": chat_title, "link": link})
+                await update.message.reply_text(f"✅ Added airdrop from *{chat_title}*", parse_mode="Markdown")
+            else:
+                await update.message.reply_text("❌ Please forward a valid channel post.")
+            user_data["awaiting_forward"] = False
+
+        # Manual airdrop creation
+        elif user_data.get("adding_manual") == "name":
+            user_data["manual_name"] = update.message.text
+            user_data["adding_manual"] = "link"
+            await update.message.reply_text("🔗 Now send the *airdrop link*.", parse_mode="Markdown")
+
+        elif user_data.get("adding_manual") == "link":
+            link = update.message.text
+            name = user_data.get("manual_name", "Unnamed")
+            airdrop_list.append({"name": name, "link": link})
+            await update.message.reply_text(f"✅ Airdrop '{name}' added successfully!")
+            user_data.clear()
+
+    # ------------------------------------------------------------------
+    # Register handlers to the main app
+    # ------------------------------------------------------------------
+    app.add_handler(CommandHandler("airdrops", airdrop_menu))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, message_handler))
