@@ -12,7 +12,8 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-from keepalive import keep_alive
+from keep_alive import keep_alive
+keep_alive()
 
 # ====== ENV VARS ======
 BOT_TOKEN = os.getenv("BOT_TOKEN")
