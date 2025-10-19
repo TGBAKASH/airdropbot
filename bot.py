@@ -104,6 +104,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.edit_message_text(help_text, parse_mode='Markdown')
 
+# --- Error handler ---
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Log errors caused by updates."""
+    logger.error(f"Update {update} caused error {context.error}")
+    
+    # Notify user about the error
+    if update and update.effective_message:
+        await update.effective_message.reply_text(
+            "⚠️ An error occurred. Please try again later."
+        )
+
 # --- Main entry ---
 def main():
     keep_alive()  # start Flask keep-alive server
@@ -117,6 +128,9 @@ def main():
     
     # Callback handler for inline buttons
     app.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Error handler
+    app.add_error_handler(error_handler)
 
     # Register handlers from other modules (if they exist)
     try:
