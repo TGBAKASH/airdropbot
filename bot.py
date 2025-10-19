@@ -1,14 +1,19 @@
+# bot.py
 import logging
 import os
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
     filters,
 )
-from keep_alive import keep_alive  # keep_alive server to keep Render awake
+from keep_alive import keep_alive
+import airdrop
+import wallet
+import admin
 
 # --- Logging setup ---
 logging.basicConfig(
@@ -17,29 +22,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Environment Variables ---
+# --- Bot token ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("❌ BOT_TOKEN not set in environment variables!")
 
-# --- Command Handlers ---
+# --- Basic commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 Bot is online and running!")
+    await update.message.reply_text("🤖 Bot is online and running!")
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    await update.message.reply_text(f"You said: {text}")
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("ℹ️ Use /start to begin.")
 
-# --- Main function ---
+# --- Main entry ---
 def main():
-    keep_alive()  # starts Flask keep-alive server
+    keep_alive()  # start Flask keep-alive server
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Handlers
+    # Core commands
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    app.add_handler(CommandHandler("help", help_command))
 
-    logger.info("Bot started successfully!")
-    app.run_polling()
+    # Register handlers from other modules
+    airdrop.register_handlers(app)
+    wallet.register_handlers(app)
+    admin.register_handlers(app)
+
+    logger.info("🚀 Bot is starting...")
+    app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
