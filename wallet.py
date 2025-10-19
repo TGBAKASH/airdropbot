@@ -169,9 +169,7 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def connect_wallet_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start wallet connection process"""
     keyboard = [
-        [InlineKeyboardButton("🔷 Ethereum (ETH)", callback_data='chain_ethereum')],
-        [InlineKeyboardButton("🔵 Arbitrum", callback_data='chain_arbitrum')],
-        [InlineKeyboardButton("🔵 Base", callback_data='chain_base')],
+        [InlineKeyboardButton("🔷 Ethereum (ETH/ARB/BASE)", callback_data='chain_ethereum')],
         [InlineKeyboardButton("🟣 Solana", callback_data='chain_solana')],
         [InlineKeyboardButton("❌ Cancel", callback_data='cancel_wallet')]
     ]
@@ -180,8 +178,8 @@ async def connect_wallet_start(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(
         "🔗 *Connect Your Wallet*\n\n"
         "Please select your blockchain:\n\n"
-        "💡 *Tip:* You'll receive real-time notifications for transactions!",
-        parse_mode='Markdown',
+        "💡 *Note:* Ethereum option includes ETH Mainnet, Arbitrum, and Base\\!",
+        parse_mode='MarkdownV2',
         reply_markup=reply_markup
     )
     
@@ -198,23 +196,34 @@ async def chain_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     chain_map = {
         'chain_ethereum': 'Ethereum',
-        'chain_arbitrum': 'Arbitrum',
-        'chain_base': 'Base',
         'chain_solana': 'Solana'
     }
     
     chain = chain_map.get(query.data)
+    if not chain:
+        await query.edit_message_text("❌ Invalid selection. Please try again with /connect_wallet")
+        return ConversationHandler.END
+    
     context.user_data['selected_chain'] = chain
     
     if chain == 'Solana':
-        prompt = "Please send your Solana wallet address:"
+        prompt_text = (
+            "🟣 *Solana Selected*\n\n"
+            "Please send your Solana wallet address:\n\n"
+            "Example: `DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK`"
+        )
     else:
-        prompt = f"Please send your {chain} wallet address (0x...):"
+        prompt_text = (
+            "🔷 *Ethereum Selected*\n\n"
+            "Please send your Ethereum wallet address:\n\n"
+            "Example: `0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb`\n\n"
+            "💡 This address will be monitored on:\n"
+            "• Ethereum Mainnet\n"
+            "• Arbitrum\n"
+            "• Base"
+        )
     
-    await query.edit_message_text(
-        f"🔗 *{chain} Selected*\n\n{prompt}",
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text(prompt_text, parse_mode='Markdown')
     
     return ENTERING_ADDRESS
 
@@ -224,31 +233,43 @@ async def address_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chain = context.user_data.get('selected_chain')
     user_id = update.effective_user.id
     
+    if not chain:
+        await update.message.reply_text(
+            "❌ Session expired. Please start again with /connect_wallet"
+        )
+        return ConversationHandler.END
+    
     # Validate address
     if chain == 'Solana':
         if not is_valid_solana_address(address):
             await update.message.reply_text(
-                "❌ Invalid Solana address. Please try again with /connect_wallet"
+                "❌ *Invalid Solana address!*\n\n"
+                "Please try again with /connect\\_wallet\n\n"
+                "A valid Solana address looks like:\n"
+                "`DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK`",
+                parse_mode='MarkdownV2'
             )
             return ConversationHandler.END
     else:
         if not is_valid_eth_address(address):
             await update.message.reply_text(
-                "❌ Invalid Ethereum address. Please try again with /connect_wallet"
+                "❌ *Invalid Ethereum address!*\n\n"
+                "Please try again with /connect\\_wallet\n\n"
+                "A valid Ethereum address looks like:\n"
+                "`0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb`",
+                parse_mode='MarkdownV2'
             )
             return ConversationHandler.END
     
     # Show processing message
-    loading_msg = await update.message.reply_text("⏳ Setting up notifications...")
+    loading_msg = await update.message.reply_text("⏳ Setting up your wallet...")
     
-    # Add to webhook for notifications
+    # Add to webhook for notifications (only for Ethereum)
     webhook_added = False
-    if chain == 'Ethereum' and ALCHEMY_WEBHOOK_ID_ETH:
-        webhook_added = await add_address_to_webhook(address, ALCHEMY_WEBHOOK_ID_ETH, ALCHEMY_WEBHOOK_SECRET_ETH)
-    elif chain == 'Arbitrum' and ALCHEMY_WEBHOOK_ID_ARB:
-        webhook_added = await add_address_to_webhook(address, ALCHEMY_WEBHOOK_ID_ARB, ALCHEMY_WEBHOOK_SECRET_ARB)
-    elif chain == 'Base' and ALCHEMY_WEBHOOK_ID_BASE:
-        webhook_added = await add_address_to_webhook(address, ALCHEMY_WEBHOOK_ID_BASE, ALCHEMY_WEBHOOK_SECRET_BASE)
+    if chain == 'Ethereum':
+        if ALCHEMY_WEBHOOK_ID_ETH:
+            webhook_added = await add_address_to_webhook(address, ALCHEMY_WEBHOOK_ID_ETH, ALCHEMY_WEBHOOK_SECRET_ETH)
+            logger.info(f"Webhook registration result: {webhook_added}")
     
     # Save wallet
     user_wallets[user_id] = {
@@ -260,16 +281,23 @@ async def address_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Map wallet to user for notifications
     wallet_to_user[address.lower()] = user_id
     
-    notification_status = "🔔 Enabled" if webhook_added else "🔕 Disabled (webhook not configured)"
+    notification_status = "🔔 Enabled" if webhook_added else "⚠️ Not configured"
     
-    await loading_msg.edit_text(
-        f"✅ *Wallet Connected!*\n\n"
+    success_text = (
+        f"✅ *Wallet Connected Successfully!*\n\n"
         f"Chain: {chain}\n"
         f"Address: `{address}`\n"
         f"Notifications: {notification_status}\n\n"
-        f"Use /balance to check your balance",
-        parse_mode='Markdown'
+        f"📊 Commands:\n"
+        f"/balance \\- Check your balance\n"
+        f"/wallet \\- View wallet info\n"
+        f"/notifications \\- Toggle alerts"
     )
+    
+    await loading_msg.edit_text(success_text, parse_mode='MarkdownV2')
+    
+    # Clear user data
+    context.user_data.clear()
     
     return ConversationHandler.END
 
@@ -284,7 +312,8 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if user_id not in user_wallets:
         await update.message.reply_text(
-            "❌ No wallet connected. Use /connect_wallet first."
+            "❌ No wallet connected\\. Use /connect\\_wallet first\\.",
+            parse_mode='MarkdownV2'
         )
         return
     
@@ -293,7 +322,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     address = wallet_info['address']
     
     # Send loading message
-    loading_msg = await update.message.reply_text("⏳ Fetching balance...")
+    loading_msg = await update.message.reply_text("⏳ Fetching balance from blockchain...")
     
     try:
         if chain == 'Ethereum':
@@ -301,30 +330,16 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             eth_balance = await get_eth_balance(address, ETH_RPC)
             arb_balance = await get_eth_balance(address, ARBITRUM_RPC)
             base_balance = await get_eth_balance(address, BASE_RPC)
+            total = eth_balance + arb_balance + base_balance
             
             balance_text = (
                 f"💰 *Balance for {chain}*\n\n"
                 f"Address: `{address[:8]}...{address[-6:]}`\n\n"
-                f"🔷 Ethereum Mainnet: {eth_balance:.6f} ETH\n"
-                f"🔵 Arbitrum: {arb_balance:.6f} ETH\n"
-                f"🔵 Base: {base_balance:.6f} ETH\n\n"
-                f"Total: {eth_balance + arb_balance + base_balance:.6f} ETH"
-            )
-        
-        elif chain == 'Arbitrum':
-            balance = await get_eth_balance(address, ARBITRUM_RPC)
-            balance_text = (
-                f"💰 *Balance for {chain}*\n\n"
-                f"Address: `{address[:8]}...{address[-6:]}`\n\n"
-                f"🔵 Arbitrum: {balance:.6f} ETH"
-            )
-        
-        elif chain == 'Base':
-            balance = await get_eth_balance(address, BASE_RPC)
-            balance_text = (
-                f"💰 *Balance for {chain}*\n\n"
-                f"Address: `{address[:8]}...{address[-6:]}`\n\n"
-                f"🔵 Base: {balance:.6f} ETH"
+                f"🔷 Ethereum Mainnet: *{eth_balance:.6f}* ETH\n"
+                f"🔵 Arbitrum: *{arb_balance:.6f}* ETH\n"
+                f"🔵 Base: *{base_balance:.6f}* ETH\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"📊 Total: *{total:.6f}* ETH"
             )
         
         elif chain == 'Solana':
@@ -332,15 +347,18 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             balance_text = (
                 f"💰 *Balance for {chain}*\n\n"
                 f"Address: `{address[:8]}...{address[-6:]}`\n\n"
-                f"🟣 Solana: {balance:.6f} SOL"
+                f"🟣 Solana: *{balance:.6f}* SOL"
             )
+        else:
+            balance_text = "❌ Unsupported chain"
         
         await loading_msg.edit_text(balance_text, parse_mode='Markdown')
     
     except Exception as e:
         logger.error(f"Error fetching balance: {e}")
         await loading_msg.edit_text(
-            "❌ Error fetching balance. Please try again later."
+            "❌ Error fetching balance\\. Please try again later\\.",
+            parse_mode='MarkdownV2'
         )
 
 async def notifications_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

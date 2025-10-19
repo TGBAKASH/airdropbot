@@ -151,12 +151,8 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(wallet_text, parse_mode='Markdown', reply_markup=back_markup)
 
 async def connect_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    connect_text = (
-        "🔗 *Connect Your Wallet*\n\n"
-        "Please send your Solana wallet address to connect\\.\n\n"
-        "⚠️ Make sure it's a valid Solana address\\!"
-    )
-    await update.message.reply_text(connect_text, parse_mode='MarkdownV2')
+    """This is now handled by wallet.py conversation handler"""
+    pass  # Placeholder, actual implementation is in wallet.py
 
 async def airdrops_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     airdrops_text = (
@@ -252,9 +248,12 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Main entry ---
 def main():
+    global bot_application
+    
     keep_alive()  # start Flask keep-alive server
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    bot_application = app  # Store reference for webhooks
 
     # Core commands
     app.add_handler(CommandHandler("start", start))
@@ -282,6 +281,10 @@ def main():
         logger.warning("⚠️ wallet.register_wallet_handlers not found")
 
     logger.info("🚀 Bot is starting...")
+    logger.info("📡 Webhook endpoints ready:")
+    logger.info("   - /webhook/alchemy/eth")
+    logger.info("   - /webhook/alchemy/arbitrum")
+    logger.info("   - /webhook/alchemy/base")
     app.run_polling(drop_pending_updates=True)
 
 
