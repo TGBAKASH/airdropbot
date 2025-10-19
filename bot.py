@@ -1,52 +1,48 @@
-import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import logging
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    CallbackQueryHandler,
+    MessageHandler,
+    filters,
     ContextTypes,
 )
-from keep_alive import keep_alive
+import os
+import requests
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # make sure this is set in Render
+# Enable logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# === START COMMAND ===
+# Telegram bot token
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Example start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("👤 Profile", callback_data='profile')],
-        [InlineKeyboardButton("🎁 Airdrops", callback_data='airdrops')],
-        [InlineKeyboardButton("💰 Wallet", callback_data='wallet')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        f"👋 Welcome {update.effective_user.first_name}!\n\n"
-        "Use the menu below to navigate:",
-        reply_markup=reply_markup
-    )
+    await update.message.reply_text("🚀 Bot is now running!")
 
-# === CALLBACK HANDLER ===
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    choice = query.data
+# Example function (like your TXN notifications or any webhook processing)
+async def notify_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    # Example: handle webhook text
+    if "txn" in text.lower():
+        await update.message.reply_text("💸 Transaction notification received!")
+    else:
+        await update.message.reply_text("✅ Message received!")
 
-    if choice == 'profile':
-        await query.edit_message_text("👤 Your Profile Details ...")
-    elif choice == 'airdrops':
-        await query.edit_message_text("🎁 Available Airdrops ...")
-    elif choice == 'wallet':
-        await query.edit_message_text("💰 Your Wallet Info ...")
-
-# === MAIN ===
 def main():
-    keep_alive()  # runs Flask in background
-    print("Starting bot polling...")
-
+    # Create the bot application
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
 
-    app.run_polling(drop_pending_updates=True)
+    # Add handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, notify_transaction))
+
+    # Start the bot (polling)
+    logger.info("Bot is running...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
