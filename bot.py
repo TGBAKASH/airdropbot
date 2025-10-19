@@ -14,8 +14,8 @@ keep_alive()
 # CONFIGURATION
 # =============================
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # set in Render Environment Variables
-CHANNEL_ID = -1001974850367         # your Sage Airdrops channel ID
-ADMIN_IDS = [1377923423]            # your Telegram user ID
+CHANNEL_ID = -1001974850367
+ADMIN_IDS = [1377923423]
 DB_FILE = "airdrops.db"
 
 # =============================
@@ -24,6 +24,7 @@ DB_FILE = "airdrops.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    # Airdrops table
     c.execute("""
         CREATE TABLE IF NOT EXISTS airdrops (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,6 +35,47 @@ def init_db():
             date_added TEXT
         )
     """)
+    # Users table
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            wallet_address TEXT,
+            wallet_chain TEXT,
+            joined_at TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def add_user(user):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at)
+        VALUES (?, ?, ?, ?)
+    """, (user.id, user.username, user.first_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+
+def get_user(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+
+def update_wallet(user_id, address, chain):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        UPDATE users SET wallet_address=?, wallet_chain=? WHERE user_id=?
+    """, (address, chain, user_id))
     conn.commit()
     conn.close()
 
@@ -68,34 +110,32 @@ def is_admin(user_id):
 
 
 def detect_category(text: str):
-    """Auto-classify airdrop type based on keywords."""
     t = text.lower()
     if "testnet" in t:
-        return "testnet"
+        if "l1" in t:
+            return "testnet_l1"
+        elif "l2" in t:
+            return "testnet_l2"
+        else:
+            return "testnet_other"
+    if "mainnet" in t or "launch" in t:
+        if "trade" in t:
+            return "mainnet_trading"
+        else:
+            return "mainnet_non_trading"
     if "nft" in t or "game" in t:
         return "nft"
-    if "trade" in t or "exchange" in t:
-        return "trading"
-    if "points" in t or "campaign" in t or "mission" in t:
-        return "top"
-    return "non_trading"
+    return "general"
 
 
 def extract_airdrop_info(text: str):
-    """
-    Smartly extract airdrop info from messy post text.
-    Finds title, link, description, and category.
-    """
     lines = [line.strip() for line in text.split("\n") if line.strip()]
-
-    # Extract first link
     link_match = re.search(r'(https?://\S+)', text)
     link = link_match.group(1) if link_match else "N/A"
 
-    # Detect possible project name
     title = "Untitled"
     for line in lines:
-        if any(word in line.lower() for word in ["project", "airdrop", "campaign", "testnet"]):
+        if any(word in line.lower() for word in ["project", "airdrop", "campaign", "testnet", "mainnet"]):
             title = line.split(":", 1)[-1].strip() if ":" in line else line
             break
     if title == "Untitled" and lines:
@@ -107,7 +147,6 @@ def extract_airdrop_info(text: str):
 
 
 def is_airdrop_post(text: str) -> bool:
-    """Detect if a post likely contains a real airdrop, not just updates/news."""
     text = text.lower()
     good_keywords = [
         "airdrop", "reward", "campaign", "claim", "testnet",
@@ -117,50 +156,120 @@ def is_airdrop_post(text: str) -> bool:
         "update", "news", "maintenance", "announcement",
         "winner", "result", "ended", "phase", "delay", "extension"
     ]
-
-    if any(word in text for word in good_keywords) and not any(word in text for word in bad_keywords):
-        return True
-    return False
+    return any(word in text for word in good_keywords) and not any(word in text for word in bad_keywords)
 
 # =============================
-# COMMAND HANDLERS
+# BOT HANDLERS
 # =============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    add_user(user)
     keyboard = [
-        [InlineKeyboardButton("🚀 Top Airdrops", callback_data="top")],
-        [InlineKeyboardButton("🧪 Testnet", callback_data="testnet")],
-        [InlineKeyboardButton("🎨 NFT / GameFi", callback_data="nft")],
-        [InlineKeyboardButton("💰 Trading Required", callback_data="trading")],
-        [InlineKeyboardButton("🧩 Non-Trading", callback_data="non_trading")],
-        [InlineKeyboardButton("🕓 Latest", callback_data="latest")]
+        [InlineKeyboardButton("👤 Profile", callback_data="profile")],
+        [InlineKeyboardButton("🎁 Airdrops", callback_data="airdrops")],
+        [InlineKeyboardButton("💼 Wallet", callback_data="wallet")]
     ]
     await update.message.reply_text(
-        "👋 *Welcome to Airdrop Sage Bot!*\n\nSelect a category below 👇",
+        f"👋 Welcome *{user.first_name}*!\n\nUse the menu below to navigate:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    category = query.data if query.data != "latest" else None
+    choice = query.data
 
-    data = get_airdrops(category)
-    if not data:
-        await query.edit_message_text("⚠️ No airdrops found yet.")
+    if choice == "profile":
+        user = get_user(query.from_user.id)
+        if user:
+            _, username, first_name, wallet, chain, joined = user
+            wallet_info = f"{wallet or '❌ Not Linked'} ({chain or 'N/A'})"
+            msg = (
+                f"👤 *Your Profile*\n\n"
+                f"Name: {first_name}\n"
+                f"Username: @{username}\n"
+                f"ID: `{query.from_user.id}`\n"
+                f"Wallet: {wallet_info}\n"
+                f"Joined: {joined}"
+            )
+        else:
+            msg = "⚠️ No profile found. Type /start again."
+        await query.edit_message_text(msg, parse_mode="Markdown")
+
+    elif choice == "airdrops":
+        keyboard = [
+            [InlineKeyboardButton("🧪 Testnet (L1)", callback_data="testnet_l1")],
+            [InlineKeyboardButton("🧪 Testnet (L2)", callback_data="testnet_l2")],
+            [InlineKeyboardButton("🧪 Testnet (Others)", callback_data="testnet_other")],
+            [InlineKeyboardButton("💰 Mainnet (Trading)", callback_data="mainnet_trading")],
+            [InlineKeyboardButton("🧩 Mainnet (Non-Trading)", callback_data="mainnet_non_trading")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_main")]
+        ]
+        await query.edit_message_text("🎁 *Select Airdrop Type:*", parse_mode="Markdown",
+                                      reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif choice == "wallet":
+        keyboard = [
+            [InlineKeyboardButton("🔗 Link Wallet", callback_data="link_wallet")],
+            [InlineKeyboardButton("💰 Portfolio", callback_data="portfolio")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_main")]
+        ]
+        await query.edit_message_text("💼 *Wallet Menu:*", parse_mode="Markdown",
+                                      reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif choice.startswith("testnet") or choice.startswith("mainnet"):
+        data = get_airdrops(choice)
+        msg = f"📋 *{choice.replace('_', ' ').title()} Airdrops:*\n\n"
+        if not data:
+            msg += "No airdrops yet."
+        else:
+            for title, link, desc in data[:10]:
+                msg += f"• [{title}]({link})\n_{desc[:100]}..._\n\n"
+        await query.edit_message_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
+
+    elif choice == "link_wallet":
+        await query.edit_message_text("🔗 Send your wallet chain (e.g. Ethereum, Solana, BSC):")
+        context.user_data["awaiting_chain"] = True
+
+    elif choice == "portfolio":
+        await query.edit_message_text("💰 Portfolio tracking coming soon (with live balances).")
+
+    elif choice == "back_main":
+        keyboard = [
+            [InlineKeyboardButton("👤 Profile", callback_data="profile")],
+            [InlineKeyboardButton("🎁 Airdrops", callback_data="airdrops")],
+            [InlineKeyboardButton("💼 Wallet", callback_data="wallet")]
+        ]
+        await query.edit_message_text("🏠 *Main Menu:*", parse_mode="Markdown",
+                                      reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    text = update.message.text.strip()
+
+    # Step 1: Chain input
+    if context.user_data.get("awaiting_chain"):
+        context.user_data["wallet_chain"] = text
+        context.user_data["awaiting_chain"] = False
+        context.user_data["awaiting_address"] = True
+        await update.message.reply_text(f"✅ Chain set to *{text}*.\nNow send your wallet address:", parse_mode="Markdown")
         return
 
-    msg = f"📋 *{category.capitalize() if category else 'Latest'} Airdrops:*\n\n"
-    for title, link, desc in data[:10]:
-        msg += f"• [{title}]({link})\n_{desc[:150]}..._\n\n"
-    await query.edit_message_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
+    # Step 2: Wallet address input
+    if context.user_data.get("awaiting_address"):
+        chain = context.user_data.get("wallet_chain", "Unknown")
+        update_wallet(user_id, text, chain)
+        context.user_data["awaiting_address"] = False
+        await update.message.reply_text("✅ Wallet linked successfully!")
+        return
 
 # =============================
 # CHANNEL AUTO FETCH
 # =============================
 async def channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Triggered when a message is posted in your channel."""
     post = update.channel_post
     if not post or post.chat.id != CHANNEL_ID:
         return
@@ -169,7 +278,6 @@ async def channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
-    # ✅ Skip updates / announcements
     if not is_airdrop_post(text):
         print("ℹ️ Skipped non-airdrop message.")
         return
@@ -179,23 +287,6 @@ async def channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"✅ Auto-saved from channel: {title} ({cat})")
 
 # =============================
-# FORWARDED MESSAGES (ADMIN)
-# =============================
-async def forwarded_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admins can forward posts to bot to save them."""
-    user = update.effective_user
-    if not is_admin(user.id):
-        return
-
-    msg = update.message.text or update.message.caption
-    if not msg:
-        return
-
-    title, link, desc, cat = extract_airdrop_info(msg)
-    add_airdrop(title, link, desc, cat)
-    await update.message.reply_text(f"✅ Airdrop '{title}' added under {cat} category.")
-
-# =============================
 # MAIN APP
 # =============================
 def main():
@@ -203,11 +294,11 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_click))
+    app.add_handler(CallbackQueryHandler(main_menu))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet_input))
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_post))
-    app.add_handler(MessageHandler(filters.FORWARDED & filters.TEXT, forwarded_message))
 
-    print("🤖 Airdrop Sage Bot is running and monitoring channel...")
+    print("🤖 Airdrop Sage Bot v2 is running with user profiles & wallet linking...")
     app.run_polling()
 
 if __name__ == "__main__":
