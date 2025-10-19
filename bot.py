@@ -6,6 +6,8 @@ from wallet import register_wallet_handlers
 from telegram.ext import CommandHandler, MessageHandler, filters
 from telegram import Update
 from telegram.ext import ContextTypes
+from keep_alive import start_keep_alive
+
 
 # Optional admin panel if you later add it
 # from admin import register_admin_handlers  
@@ -57,4 +59,5 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    start_keep_alive()
+    app.run_polling()
