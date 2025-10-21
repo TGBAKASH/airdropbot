@@ -5,7 +5,6 @@ import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import aiohttp
-import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -14,18 +13,14 @@ CHOOSING_CHAIN, ENTERING_ADDRESS = range(2)
 
 # Store user wallets (in production, use a database)
 user_wallets = {}
-wallet_to_user = {}  # Map wallet addresses to user IDs for notifications
+wallet_to_user = {}
 
 # Alchemy API keys from environment
 ALCHEMY_API_URL = os.getenv("ALCHEMY_API_URL")
 ALCHEMY_WEBHOOK_ID_ETH = os.getenv("ALCHEMY_WEBHOOK_ID_ETH")
-ALCHEMY_WEBHOOK_ID_ARB = os.getenv("ALCHEMY_WEBHOOK_ID_ARB")
-ALCHEMY_WEBHOOK_ID_BASE = os.getenv("ALCHEMY_WEBHOOK_ID_BASE")
 ALCHEMY_WEBHOOK_SECRET_ETH = os.getenv("ALCHEMY_WEBHOOK_SECRET_ETH")
-ALCHEMY_WEBHOOK_SECRET_ARB = os.getenv("ALCHEMY_WEBHOOK_SECRET_ARB")
-ALCHEMY_WEBHOOK_SECRET_BASE = os.getenv("ALCHEMY_WEBHOOK_SECRET_BASE")
 
-# Alchemy RPC endpoints
+# RPC endpoints
 ETH_RPC = f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_URL}" if ALCHEMY_API_URL else "https://eth.llamarpc.com"
 ARBITRUM_RPC = f"https://arb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_URL}" if ALCHEMY_API_URL else "https://arb1.arbitrum.io/rpc"
 BASE_RPC = f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_URL}" if ALCHEMY_API_URL else "https://mainnet.base.org"
@@ -52,7 +47,6 @@ async def get_eth_balance(address: str, rpc_url: str) -> float:
             async with session.post(rpc_url, json=payload) as response:
                 data = await response.json()
                 if 'result' in data:
-                    # Convert from Wei to ETH
                     balance_wei = int(data['result'], 16)
                     balance_eth = balance_wei / 10**18
                     return balance_eth
@@ -74,7 +68,6 @@ async def get_solana_balance(address: str) -> float:
             async with session.post(SOLANA_RPC, json=payload) as response:
                 data = await response.json()
                 if 'result' in data and 'value' in data['result']:
-                    # Convert from lamports to SOL
                     balance_lamports = data['result']['value']
                     balance_sol = balance_lamports / 10**9
                     return balance_sol
@@ -90,7 +83,7 @@ async def add_address_to_webhook(address: str, webhook_id: str, auth_token: str)
         return False
     
     try:
-        url = f"https://dashboard.alchemy.com/api/update-webhook-addresses"
+        url = "https://dashboard.alchemy.com/api/update-webhook-addresses"
         headers = {
             "X-Alchemy-Token": auth_token,
             "Content-Type": "application/json"
@@ -104,40 +97,13 @@ async def add_address_to_webhook(address: str, webhook_id: str, auth_token: str)
         async with aiohttp.ClientSession() as session:
             async with session.patch(url, json=payload, headers=headers) as response:
                 if response.status == 200:
-                    logger.info(f"✅ Added {address} to webhook {webhook_id}")
+                    logger.info(f"Added {address} to webhook {webhook_id}")
                     return True
                 else:
                     logger.error(f"Failed to add address to webhook: {response.status}")
                     return False
     except Exception as e:
         logger.error(f"Error adding address to webhook: {e}")
-        return False
-
-async def remove_address_from_webhook(address: str, webhook_id: str, auth_token: str):
-    """Remove address from Alchemy webhook"""
-    if not webhook_id or not auth_token:
-        return False
-    
-    try:
-        url = f"https://dashboard.alchemy.com/api/update-webhook-addresses"
-        headers = {
-            "X-Alchemy-Token": auth_token,
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "webhook_id": webhook_id,
-            "addresses_to_add": [],
-            "addresses_to_remove": [address.lower()]
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.patch(url, json=payload, headers=headers) as response:
-                if response.status == 200:
-                    logger.info(f"✅ Removed {address} from webhook {webhook_id}")
-                    return True
-                return False
-    except Exception as e:
-        logger.error(f"Error removing address from webhook: {e}")
         return False
 
 async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -148,14 +114,16 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wallet_info = user_wallets[user_id]
         notifications_status = "🔔 ON" if wallet_info.get('notifications', False) else "🔕 OFF"
         
-        wallet_text = f"💰 *Your Wallet*\n\n"
-        wallet_text += f"Chain: {wallet_info['chain']}\n"
-        wallet_text += f"Address: `{wallet_info['address'][:8]}...{wallet_info['address'][-6:]}`\n"
-        wallet_text += f"Notifications: {notifications_status}\n\n"
-        wallet_text += "Commands:\n"
-        wallet_text += "/balance - Check balance\n"
-        wallet_text += "/notifications - Toggle notifications\n"
-        wallet_text += "/change\\_wallet - Change wallet"
+        wallet_text = (
+            f"💰 *Your Wallet*\n\n"
+            f"Chain: {wallet_info['chain']}\n"
+            f"Address: `{wallet_info['address'][:8]}...{wallet_info['address'][-6:]}`\n"
+            f"Notifications: {notifications_status}\n\n"
+            f"Commands:\n"
+            f"/balance - Check balance\n"
+            f"/notifications - Toggle notifications\n"
+            f"/change\\_wallet - Change wallet"
+        )
         
         await update.message.reply_text(wallet_text, parse_mode='Markdown')
     else:
@@ -178,7 +146,7 @@ async def connect_wallet_start(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(
         "🔗 *Connect Your Wallet*\n\n"
         "Please select your blockchain:\n\n"
-        "💡 *Note:* Ethereum option includes ETH Mainnet, Arbitrum, and Base\\!",
+        "💡 *Note:* Ethereum option includes ETH Mainnet, Arbitrum, and Base!",
         parse_mode='MarkdownV2',
         reply_markup=reply_markup
     )
@@ -266,10 +234,9 @@ async def address_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Add to webhook for notifications (only for Ethereum)
     webhook_added = False
-    if chain == 'Ethereum':
-        if ALCHEMY_WEBHOOK_ID_ETH:
-            webhook_added = await add_address_to_webhook(address, ALCHEMY_WEBHOOK_ID_ETH, ALCHEMY_WEBHOOK_SECRET_ETH)
-            logger.info(f"Webhook registration result: {webhook_added}")
+    if chain == 'Ethereum' and ALCHEMY_WEBHOOK_ID_ETH:
+        webhook_added = await add_address_to_webhook(address, ALCHEMY_WEBHOOK_ID_ETH, ALCHEMY_WEBHOOK_SECRET_ETH)
+        logger.info(f"Webhook registration result: {webhook_added}")
     
     # Save wallet
     user_wallets[user_id] = {
@@ -374,7 +341,7 @@ async def notifications_command(update: Update, context: ContextTypes.DEFAULT_TY
     wallet_info = user_wallets[user_id]
     current_status = wallet_info.get('notifications', False)
     
-    if not ALCHEMY_WEBHOOK_ID_ETH and not ALCHEMY_WEBHOOK_ID_ARB and not ALCHEMY_WEBHOOK_ID_BASE:
+    if not ALCHEMY_WEBHOOK_ID_ETH:
         await update.message.reply_text(
             "⚠️ Alchemy webhooks are not configured. "
             "Please set up webhook IDs in environment variables."
@@ -396,18 +363,8 @@ async def change_wallet_command(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
     
     if user_id in user_wallets:
-        # Remove from webhook
         wallet_info = user_wallets[user_id]
         address = wallet_info['address']
-        chain = wallet_info['chain']
-        
-        # Remove from appropriate webhook
-        if chain == 'Ethereum' and ALCHEMY_WEBHOOK_ID_ETH:
-            await remove_address_from_webhook(address, ALCHEMY_WEBHOOK_ID_ETH, ALCHEMY_WEBHOOK_SECRET_ETH)
-        elif chain == 'Arbitrum' and ALCHEMY_WEBHOOK_ID_ARB:
-            await remove_address_from_webhook(address, ALCHEMY_WEBHOOK_ID_ARB, ALCHEMY_WEBHOOK_SECRET_ARB)
-        elif chain == 'Base' and ALCHEMY_WEBHOOK_ID_BASE:
-            await remove_address_from_webhook(address, ALCHEMY_WEBHOOK_ID_BASE, ALCHEMY_WEBHOOK_SECRET_BASE)
         
         # Remove from mappings
         del user_wallets[user_id]
@@ -433,7 +390,6 @@ async def handle_webhook_notification(app, webhook_data: dict):
             value = float(tx.get('value', 0))
             hash_tx = tx.get('hash', '')
             asset = tx.get('asset', 'ETH')
-            category = tx.get('category', 'external')
             
             # Find affected users
             affected_users = []
@@ -484,18 +440,14 @@ async def handle_webhook_notification(app, webhook_data: dict):
 def register_wallet_handlers(app):
     """Register all wallet-related handlers"""
     
-    # Conversation handler for wallet connection - MUST be registered first
+    # Conversation handler for wallet connection
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('connect_wallet', connect_wallet_start)],
         states={
             CHOOSING_CHAIN: [CallbackQueryHandler(chain_selected, pattern='^(chain_|cancel_)')],
             ENTERING_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, address_entered)]
         },
-        fallbacks=[
-            CommandHandler('cancel', cancel_wallet),
-            CallbackQueryHandler(cancel_wallet, pattern='^cancel_wallet
-)
-        ],
+        fallbacks=[CommandHandler('cancel', cancel_wallet)],
         name="wallet_conversation",
         persistent=False
     )
@@ -507,8 +459,3 @@ def register_wallet_handlers(app):
     app.add_handler(CommandHandler('change_wallet', change_wallet_command))
     
     logger.info("✅ Wallet handlers registered")
-    logger.info("   - /connect_wallet - Start wallet connection")
-    logger.info("   - /wallet - View wallet info")
-    logger.info("   - /balance - Check balance")
-    logger.info("   - /notifications - Toggle alerts")
-    logger.info("   - /change_wallet - Disconnect wallet")
