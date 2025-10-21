@@ -484,14 +484,20 @@ async def handle_webhook_notification(app, webhook_data: dict):
 def register_wallet_handlers(app):
     """Register all wallet-related handlers"""
     
-    # Conversation handler for wallet connection
+    # Conversation handler for wallet connection - MUST be registered first
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('connect_wallet', connect_wallet_start)],
         states={
-            CHOOSING_CHAIN: [CallbackQueryHandler(chain_selected)],
+            CHOOSING_CHAIN: [CallbackQueryHandler(chain_selected, pattern='^(chain_|cancel_)')],
             ENTERING_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, address_entered)]
         },
-        fallbacks=[CommandHandler('cancel', cancel_wallet)]
+        fallbacks=[
+            CommandHandler('cancel', cancel_wallet),
+            CallbackQueryHandler(cancel_wallet, pattern='^cancel_wallet
+)
+        ],
+        name="wallet_conversation",
+        persistent=False
     )
     
     app.add_handler(conv_handler)
@@ -501,3 +507,8 @@ def register_wallet_handlers(app):
     app.add_handler(CommandHandler('change_wallet', change_wallet_command))
     
     logger.info("✅ Wallet handlers registered")
+    logger.info("   - /connect_wallet - Start wallet connection")
+    logger.info("   - /wallet - View wallet info")
+    logger.info("   - /balance - Check balance")
+    logger.info("   - /notifications - Toggle alerts")
+    logger.info("   - /change_wallet - Disconnect wallet")

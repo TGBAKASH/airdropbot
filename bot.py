@@ -259,8 +259,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("profile", profile_command))
-    app.add_handler(CommandHandler("wallet", wallet_command))
-    app.add_handler(CommandHandler("connect_wallet", connect_wallet_command))
     app.add_handler(CommandHandler("airdrops", airdrops_command))
     
     # Callback handler for inline buttons
@@ -271,14 +269,18 @@ def main():
 
     # Register handlers from other modules (if they exist)
     try:
+        wallet.register_wallet_handlers(app)
+        logger.info("✅ Wallet handlers registered")
+    except Exception as e:
+        logger.error(f"⚠️ Failed to register wallet handlers: {e}")
+        
+    try:
         airdrop.register_airdrop_handlers(app)
+        logger.info("✅ Airdrop handlers registered")
     except AttributeError:
         logger.warning("⚠️ airdrop.register_airdrop_handlers not found")
-    
-    try:
-        wallet.register_wallet_handlers(app)
-    except AttributeError:
-        logger.warning("⚠️ wallet.register_wallet_handlers not found")
+    except Exception as e:
+        logger.error(f"⚠️ Failed to register airdrop handlers: {e}")
 
     logger.info("🚀 Bot is starting...")
     logger.info("📡 Webhook endpoints ready:")
