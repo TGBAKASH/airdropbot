@@ -44,7 +44,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    welcome_text = f"Welcome to Sage Airdrops Bot, {user.first_name}!\n\n"
+    welcome_text = f"Welcome to Sage Airdrops Bot, {user.first_name}\n\n"  # Removed the !
     welcome_text += "Choose an option from the menu below:"
     
     if update.callback_query:
