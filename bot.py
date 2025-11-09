@@ -6,7 +6,6 @@ from web3 import Web3
 from datetime import datetime
 from keep_alive import keep_alive
 from database import Database
-import asyncio
 
 # Configure logging
 logging.basicConfig(
@@ -489,18 +488,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error(f"Exception while handling an update: {context.error}")
 
 # Main function
-async def main():
+def main():
     """Main function to start the bot"""
     # Start Flask server for keep-alive
     keep_alive()
     
-    # Create application with proper configuration
-    application = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .concurrent_updates(True)
-        .build()
-    )
+    # Create application
+    application = Application.builder().token(BOT_TOKEN).build()
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
@@ -511,19 +505,9 @@ async def main():
     # Add error handler
     application.add_error_handler(error_handler)
     
-    # Run bot
-    logger.info("🤖 Bot started successfully!")
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(drop_pending_updates=True)
-    
-    # Keep the bot running
-    try:
-        await asyncio.Event().wait()
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped!")
-    finally:
-        await application.stop()
+    # Run bot with simple polling
+    logger.info("🤖 Bot starting...")
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
