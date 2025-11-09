@@ -6,6 +6,7 @@ from web3 import Web3
 from datetime import datetime
 from keep_alive import keep_alive
 from database import Database
+import asyncio
 
 # Configure logging
 logging.basicConfig(
@@ -23,13 +24,18 @@ ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY', os.getenv('ALCHEMY_API_URL', '').
 db = Database()
 
 # Web3 connections
+w3_eth = None
+w3_arb = None
+w3_base = None
+
 try:
-    w3_eth = Web3(Web3.HTTPProvider(f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
-    w3_arb = Web3(Web3.HTTPProvider(f"https://arb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
-    w3_base = Web3(Web3.HTTPProvider(f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
+    if ALCHEMY_API_KEY:
+        w3_eth = Web3(Web3.HTTPProvider(f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
+        w3_arb = Web3(Web3.HTTPProvider(f"https://arb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
+        w3_base = Web3(Web3.HTTPProvider(f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
+        logger.info("Web3 connections initialized")
 except Exception as e:
     logger.warning(f"Web3 connection error: {e}")
-    w3_eth = w3_arb = w3_base = None
 
 # Main menu
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -478,13 +484,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif context.user_data.get('awaiting_support_message'):
         await handle_support_message(update, context)
 
+# Error handler
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(f"Exception while handling an update: {context.error}")
+
 # Main function
-def main():
+async def main():
+    """Main function to start the bot"""
     # Start Flask server for keep-alive
     keep_alive()
     
-    # Create application
-    application = Application.builder().token(BOT_TOKEN).build()
+    # Create application with proper configuration
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .concurrent_updates(True)
+        .build()
+    )
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
@@ -492,9 +508,22 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
+    # Add error handler
+    application.add_error_handler(error_handler)
+    
     # Run bot
-    logger.info("Bot started!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("🤖 Bot started successfully!")
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(drop_pending_updates=True)
+    
+    # Keep the bot running
+    try:
+        await asyncio.Event().wait()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped!")
+    finally:
+        await application.stop()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
