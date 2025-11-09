@@ -3,7 +3,6 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from web3 import Web3
-import json
 from datetime import datetime
 from keep_alive import keep_alive
 from database import Database
@@ -18,18 +17,19 @@ logger = logging.getLogger(__name__)
 # Environment variables
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
-ALCHEMY_API_URL = os.getenv('ALCHEMY_API_URL')
-ALCHEMY_WEBHOOK_ID_ARB = os.getenv('ALCHEMY_WEBHOOK_ID_ARB')
-ALCHEMY_WEBHOOK_ID_BASE = os.getenv('ALCHEMY_WEBHOOK_ID_BASE')
-ALCHEMY_WEBHOOK_ID_ETH = os.getenv('ALCHEMY_WEBHOOK_ID_ETH')
+ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY', os.getenv('ALCHEMY_API_URL', '').split('/')[-1])
 
 # Initialize database
 db = Database()
 
 # Web3 connections
-w3_eth = Web3(Web3.HTTPProvider(f"https://eth-mainnet.g.alchemy.com/v2/{os.getenv('ALCHEMY_API_KEY')}"))
-w3_arb = Web3(Web3.HTTPProvider(f"https://arb-mainnet.g.alchemy.com/v2/{os.getenv('ALCHEMY_API_KEY')}"))
-w3_base = Web3(Web3.HTTPProvider(f"https://base-mainnet.g.alchemy.com/v2/{os.getenv('ALCHEMY_API_KEY')}"))
+try:
+    w3_eth = Web3(Web3.HTTPProvider(f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
+    w3_arb = Web3(Web3.HTTPProvider(f"https://arb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
+    w3_base = Web3(Web3.HTTPProvider(f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
+except Exception as e:
+    logger.warning(f"Web3 connection error: {e}")
+    w3_eth = w3_arb = w3_base = None
 
 # Main menu
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,7 +44,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    welcome_text = f"Welcome to Sage Airdrops Bot, {user.first_name}\n\n"  # Removed the !
+    welcome_text = f"Welcome to Sage Airdrops Bot, {user.first_name}!\n\n"
     welcome_text += "Choose an option from the menu below:"
     
     if update.callback_query:
@@ -311,18 +311,24 @@ async def get_network_balance(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         address = wallet_info.get('ethereum')
         
-        if network == 'eth':
+        if network == 'eth' and w3_eth:
             balance_wei = w3_eth.eth.get_balance(address)
             balance = w3_eth.from_wei(balance_wei, 'ether')
             network_name = "Ethereum Mainnet"
-        elif network == 'arb':
+        elif network == 'arb' and w3_arb:
             balance_wei = w3_arb.eth.get_balance(address)
             balance = w3_arb.from_wei(balance_wei, 'ether')
             network_name = "Arbitrum"
-        elif network == 'base':
+        elif network == 'base' and w3_base:
             balance_wei = w3_base.eth.get_balance(address)
             balance = w3_base.from_wei(balance_wei, 'ether')
             network_name = "Base"
+        else:
+            text = "❌ Web3 connection not available"
+            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data='check_balance')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            return
         
         text = f"💰 **Balance on {network_name}**\n\n"
         text += f"Address: `{address[:6]}...{address[-4:]}`\n"
@@ -367,23 +373,24 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
     db.save_support_message(user.id, message)
     
     # Notify admin
-    admin_text = f"📩 **New Support Message**\n\n"
-    admin_text += f"From: {user.first_name} (@{user.username if user.username else 'No username'})\n"
-    admin_text += f"User ID: `{user.id}`\n\n"
-    admin_text += f"Message:\n{message}"
-    
-    keyboard = [[InlineKeyboardButton("💬 Reply", callback_data=f'reply_{user.id}')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    try:
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=admin_text,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-    except Exception as e:
-        logger.error(f"Error notifying admin: {e}")
+    if ADMIN_ID:
+        admin_text = f"📩 **New Support Message**\n\n"
+        admin_text += f"From: {user.first_name} (@{user.username if user.username else 'No username'})\n"
+        admin_text += f"User ID: `{user.id}`\n\n"
+        admin_text += f"Message:\n{message}"
+        
+        keyboard = [[InlineKeyboardButton("💬 Reply", callback_data=f'reply_{user.id}')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=admin_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Error notifying admin: {e}")
     
     # Confirm to user
     context.user_data['awaiting_support_message'] = False
@@ -428,46 +435,6 @@ async def admin_add_airdrop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Error: {str(e)}"
         )
 
-# Admin: Reply to support message
-async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    
-    if update.effective_user.id != ADMIN_ID:
-        await query.answer("Unauthorized!", show_alert=True)
-        return
-    
-    await query.answer()
-    
-    user_id = int(query.data.split('_')[1])
-    context.user_data['replying_to'] = user_id
-    
-    await query.edit_message_text(
-        f"Type your reply for user {user_id}:"
-    )
-
-# Handle admin reply
-async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    
-    if 'replying_to' not in context.user_data:
-        return
-    
-    user_id = context.user_data['replying_to']
-    reply_text = update.message.text
-    
-    try:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"📩 **Support Reply from Admin:**\n\n{reply_text}",
-            parse_mode='Markdown'
-        )
-        await update.message.reply_text("✅ Reply sent successfully!")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error sending reply: {str(e)}")
-    
-    del context.user_data['replying_to']
-
 # Callback query router
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -503,8 +470,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await get_network_balance(update, context)
     elif data == 'help':
         await help_handler(update, context)
-    elif data.startswith('reply_'):
-        await admin_reply_handler(update, context)
+
+# Message handler
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if 'connecting_wallet' in context.user_data:
+        await handle_wallet_address(update, context)
+    elif context.user_data.get('awaiting_support_message'):
+        await handle_support_message(update, context)
 
 # Main function
 def main():
@@ -518,17 +490,11 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("add_airdrop", admin_add_airdrop))
     application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND, 
-        lambda u, c: handle_wallet_address(u, c) if 'connecting_wallet' in c.user_data 
-        else handle_support_message(u, c) if c.user_data.get('awaiting_support_message') 
-        else handle_admin_reply(u, c) if c.user_data.get('replying_to') 
-        else None
-    ))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
     # Run bot
     logger.info("Bot started!")
-    application.run_polling()
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()

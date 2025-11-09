@@ -2,5 +2,3 @@ python-telegram-bot==20.7
 web3==6.11.3
 flask==3.0.0
 requests==2.31.0
-eth-abi==4.0.0
-setuptools==69.0.0
